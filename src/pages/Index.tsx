@@ -95,7 +95,7 @@ const Index = () => {
       <CameraView
         onClose={() => setShowCamera(false)}
         onCapture={handleImageCapture}
-        recentImage={capturedImages[0]}
+        recentImages={capturedImages}
         onUpload={handleImageUpload}
       />
     );
