@@ -19,15 +19,23 @@ const CameraView: React.FC<CameraViewProps> = ({ onClose, onCapture, recentImage
   const [showRecentPics, setShowRecentPics] = useState(false);
   const [facingMode, setFacingMode] = useState<'user' | 'environment'>('environment');
   const [stream, setStream] = useState<MediaStream | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const { toast } = useToast();
 
   const startCamera = async (facing: 'user' | 'environment' = 'environment') => {
     try {
       setIsLoading(true);
+      setError(null);
       
       // Stop existing stream if any
       if (stream) {
         stream.getTracks().forEach(track => track.stop());
+        setStream(null);
+      }
+
+      // Check if getUserMedia is supported
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error('Camera not supported by your browser');
       }
 
       // Request camera access with proper constraints
@@ -41,62 +49,88 @@ const CameraView: React.FC<CameraViewProps> = ({ onClose, onCapture, recentImage
         audio: false
       };
 
+      console.log('Requesting camera access...');
       const newStream = await navigator.mediaDevices.getUserMedia(constraints);
+      console.log('Camera access granted, setting up video...');
       
       if (videoRef.current) {
         videoRef.current.srcObject = newStream;
         
-        // Wait for video to be ready
-        videoRef.current.onloadedmetadata = () => {
-          videoRef.current?.play();
-          setHasPermission(true);
-          setIsLoading(false);
+        // Wait for video to be ready and start playing
+        const videoElement = videoRef.current;
+        
+        const handleCanPlay = () => {
+          console.log('Video can play, starting playback...');
+          videoElement.play()
+            .then(() => {
+              console.log('Video is now playing');
+              setHasPermission(true);
+              setIsLoading(false);
+              setError(null);
+            })
+            .catch(err => {
+              console.error('Error playing video:', err);
+              setError('Failed to start video playback');
+              setIsLoading(false);
+            });
         };
+
+        const handleLoadedMetadata = () => {
+          console.log('Video metadata loaded');
+        };
+
+        videoElement.addEventListener('canplay', handleCanPlay);
+        videoElement.addEventListener('loadedmetadata', handleLoadedMetadata);
+        
+        // Cleanup event listeners
+        const cleanup = () => {
+          videoElement.removeEventListener('canplay', handleCanPlay);
+          videoElement.removeEventListener('loadedmetadata', handleLoadedMetadata);
+        };
+
+        // Store cleanup function
+        videoElement.dataset.cleanup = 'true';
         
         setStream(newStream);
+        
+        // Fallback timeout
+        setTimeout(() => {
+          if (isLoading && videoElement.readyState >= 2) {
+            handleCanPlay();
+          }
+        }, 3000);
       }
     } catch (error) {
       console.error('Error accessing camera:', error);
       setIsLoading(false);
       setHasPermission(false);
       
-      // More specific error handling
+      let errorMessage = 'Unable to access camera';
+      
       if (error instanceof Error) {
         if (error.name === 'NotAllowedError') {
-          toast({
-            title: "Camera access denied",
-            description: "Please allow camera access in your browser settings and refresh the page",
-            variant: "destructive",
-          });
+          errorMessage = 'Camera access denied. Please allow camera access and try again.';
         } else if (error.name === 'NotFoundError') {
-          toast({
-            title: "No camera found",
-            description: "Please make sure your camera is connected and try again",
-            variant: "destructive",
-          });
-        } else {
-          toast({
-            title: "Camera error",
-            description: "Unable to access camera. Please try again.",
-            variant: "destructive",
-          });
+          errorMessage = 'No camera found. Please make sure your camera is connected.';
+        } else if (error.name === 'NotReadableError') {
+          errorMessage = 'Camera is already in use by another application.';
+        } else if (error.name === 'OverconstrainedError') {
+          errorMessage = 'Camera does not support the requested settings.';
+        } else if (error.message) {
+          errorMessage = error.message;
         }
       }
+      
+      setError(errorMessage);
+      toast({
+        title: "Camera Error",
+        description: errorMessage,
+        variant: "destructive",
+      });
     }
   };
 
   useEffect(() => {
-    // Check if getUserMedia is supported
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      toast({
-        title: "Camera not supported",
-        description: "Your browser doesn't support camera access",
-        variant: "destructive",
-      });
-      setIsLoading(false);
-      return;
-    }
-
     startCamera(facingMode);
 
     return () => {
@@ -150,22 +184,24 @@ const CameraView: React.FC<CameraViewProps> = ({ onClose, onCapture, recentImage
     );
   }
 
-  if (!hasPermission) {
+  if (error || !hasPermission) {
     return (
       <div className="fixed inset-0 bg-black z-50 flex items-center justify-center">
         <div className="text-white text-center p-8 max-w-md">
           <div className="w-24 h-24 bg-red-500/20 rounded-full flex items-center justify-center mb-6 mx-auto">
             <X className="w-12 h-12 text-red-400" />
           </div>
-          <h2 className="text-2xl font-bold mb-4">Camera Access Required</h2>
+          <h2 className="text-2xl font-bold mb-4">Camera Access Issue</h2>
           <p className="text-gray-300 mb-6">
-            To use the camera feature, please:
+            {error || 'Camera access is required to use this feature'}
           </p>
-          <div className="text-left text-gray-300 mb-8 space-y-2">
-            <p>1. Click the camera icon in your browser's address bar</p>
-            <p>2. Select "Allow" for camera access</p>
-            <p>3. Refresh the page and try again</p>
-          </div>
+          {!error && (
+            <div className="text-left text-gray-300 mb-8 space-y-2 text-sm">
+              <p>• Click the camera icon in your browser's address bar</p>
+              <p>• Select "Allow" for camera access</p>
+              <p>• Make sure no other app is using your camera</p>
+            </div>
+          )}
           <div className="space-y-4">
             <button
               onClick={() => startCamera(facingMode)}
